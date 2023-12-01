@@ -6,6 +6,7 @@ package confighttp // import "go.opentelemetry.io/collector/config/confighttp"
 import (
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -73,6 +74,16 @@ type HTTPClientSettings struct {
 	// IdleConnTimeout is the maximum amount of time a connection will remain open before closing itself.
 	// There's an already set value, and we want to override it only if an explicit value provided
 	IdleConnTimeout *time.Duration `mapstructure:"idle_conn_timeout"`
+
+	// This is needed in case you run into
+	// https://github.com/golang/go/issues/59690
+	// https://github.com/golang/go/issues/36026
+	// HTTP2ReadIdleTimeout if the connection has been idle for the configured value send a ping frame for health check
+	// 0s means no health check will be performed.
+	HTTP2ReadIdleTimeout *time.Duration `mapstructure:"http2_read_idle_timeout"`
+	// HTTP2PingTimeout if there's no response to the ping within the configured value, the connection will be closed.
+	// Defaults to 15s.
+	HTTP2PingTimeout *time.Duration `mapstructure:"http2_ping_timeout"`
 }
 
 // NewDefaultHTTPClientSettings returns HTTPClientSettings type object with
@@ -123,6 +134,16 @@ func (hcs *HTTPClientSettings) ToClient(host component.Host, settings component.
 		transport.IdleConnTimeout = *hcs.IdleConnTimeout
 	}
 
+	if hcs.HTTP2ReadIdleTimeout != nil && hcs.HTTP2ReadIdleTimeout.Seconds() > 0 {
+		transport2, transportErr := http2.ConfigureTransports(transport)
+		if transportErr != nil {
+			return nil, fmt.Errorf("failed to configure http2 transport: %w", transportErr)
+		}
+		transport2.ReadIdleTimeout = *hcs.HTTP2ReadIdleTimeout
+		if hcs.HTTP2PingTimeout != nil {
+			transport2.PingTimeout = *hcs.HTTP2PingTimeout
+		}
+	}
 	clientTransport := (http.RoundTripper)(transport)
 
 	// The Auth RoundTripper should always be the innermost to ensure that
